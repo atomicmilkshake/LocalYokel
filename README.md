@@ -1,5 +1,5 @@
 <div align="center">
-  <img alt="LocalYokel" src="assets/localyokel-icon.jpg" width="220">
+  <img alt="LocalYokel" src="assets/localyokel-lockup.png" width="720">
   <h1>LocalYokel</h1>
   <p>Local MoE-offload inference. Built on FreeToken.</p>
 </div>
