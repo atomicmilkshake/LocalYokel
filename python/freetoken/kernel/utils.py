@@ -17,9 +17,33 @@ DISABLE_KERNEL_CACHE_VERSION_CHECK_ENV = "FREETOKEN_DISABLE_KERNEL_CACHE_VERSION
 DISABLE_JIT_ENV = "FREETOKEN_DISABLE_JIT"
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 DEFAULT_INCLUDE = [str(KERNEL_PATH / "include")]
-DEFAULT_CFLAGS = ["-std=c++20", "-O3"]
+if os.name == "nt":
+    for _p in (
+        r"S:\WADK102\Include\10.0.26100.0\ucrt",
+        r"S:\WADK102\Include\10.0.26100.0\um",
+        r"S:\WADK102\Include\10.0.26100.0\shared",
+    ):
+        if os.path.exists(_p) and _p not in DEFAULT_INCLUDE:
+            DEFAULT_INCLUDE.append(_p)
+DEFAULT_CFLAGS = ["/std:c++20", "/O2"] if os.name == "nt" else ["-std=c++20", "-O3"]
 DEFAULT_CUDA_CFLAGS = ["-std=c++20", "-O3", "--expt-relaxed-constexpr"]
-DEFAULT_LDFLAGS = []
+def _windows_ldflags() -> List[str]:
+    flags = [
+        r"/LIBPATH:S:\WADK102\Lib\10.0.26100.0\ucrt\x64",
+        r"/LIBPATH:S:\WADK102\Lib\10.0.26100.0\um\x64",
+    ]
+    cuda_root = os.environ.get("CUDA_PATH") or os.environ.get("CUDA_HOME") or r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2"
+    # Prefer a space-free junction: ninja/cmd split "Program Files" LIBPATH.
+    for cand in (r"J:\LLM\toolchains\cuda132\lib\x64", os.path.join(cuda_root, "lib", "x64")):
+        if os.path.isdir(cand):
+            libpath = cand if " " not in cand else f'"{cand}"'
+            flags.append(f"/LIBPATH:{libpath}")
+            flags.append("cudart.lib")
+            break
+    return flags
+
+
+DEFAULT_LDFLAGS = _windows_ldflags() if os.name == "nt" else []
 
 
 def _cuda_cflags(extra: List[str]) -> List[str]:
@@ -96,11 +120,27 @@ def _kernel_cache_version_ok(cache_version: str, runtime_version: str) -> bool:
     may lack a stamp (dev builds) -- then only the release part is compared."""
     cache_base, cache_local = _version_parts(cache_version)
     runtime_base, runtime_local = _version_parts(runtime_version)
-    if cache_base != runtime_base:
-        return False
     cache_stamps = _build_stamps(cache_local)
     runtime_stamps = _build_stamps(runtime_local)
-    return not (cache_stamps and runtime_stamps and cache_stamps != runtime_stamps)
+    if cache_stamps and runtime_stamps and cache_stamps != runtime_stamps:
+        return False
+    if cache_base == runtime_base:
+        return True
+    # Windows wheels often lag a patch (0.1.1 cache vs 0.1.2 runtime). Allow when
+    # CUDA major in the cache local version matches torch (checked by caller).
+    def _rel_tuple(s: str) -> tuple[int, ...]:
+        parts = []
+        for p in s.split("."):
+            try:
+                parts.append(int(p))
+            except ValueError:
+                break
+        return tuple(parts or [0])
+
+    cb, rb = _rel_tuple(cache_base), _rel_tuple(runtime_base)
+    if cb[:2] == rb[:2]:  # same major.minor
+        return True
+    return False
 
 
 def _kernel_cache_dir() -> pathlib.Path | None:
@@ -125,6 +165,15 @@ def _kernel_cache_dir() -> pathlib.Path | None:
             raise RuntimeError(
                 "freetoken-kernel-cache version "
                 f"{package_version!r} does not match freetoken version {runtime_version!r}"
+            )
+        if _version_parts(package_version)[0] != _version_parts(runtime_version)[0]:
+            import warnings
+
+            warnings.warn(
+                f"freetoken-kernel-cache {package_version!r} != freetoken {runtime_version!r}; "
+                "using cache because CUDA major/minor release matches.",
+                RuntimeWarning,
+                stacklevel=2,
             )
         cache_cuda = re.search(r"\+cu(\d{2,})", package_version)
         if cache_cuda is not None:
@@ -155,11 +204,12 @@ def _load_prebuilt(name: str) -> Module | None:
             )
         return None
 
-    so_path = cache_dir / name / f"{name}.so"
-    if so_path.exists():
-        import tvm_ffi
+    import tvm_ffi
 
-        return tvm_ffi.load_module(str(so_path))
+    for ext in (".so", ".dll", ".pyd"):
+        so_path = cache_dir / name / f"{name}{ext}"
+        if so_path.exists():
+            return tvm_ffi.load_module(str(so_path))
 
     if _env_enabled(DISABLE_JIT_ENV):
         raise RuntimeError(

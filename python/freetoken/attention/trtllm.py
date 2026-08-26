@@ -65,6 +65,9 @@ class TensorRTLLMBackend(BaseAttnBackend):
         metadata = batch.attn_metadata
         assert isinstance(metadata, TRTLLMMetadata)
         self.kvcache.store_kv(k, v, batch.out_loc, layer_id)
+        mat = getattr(self.kvcache, "materialize", None)
+        if callable(mat):
+            mat(layer_id, metadata.page_table)
         kv_cache = (self.kvcache.k_cache(layer_id), self.kvcache.v_cache(layer_id))
 
         if batch.is_prefill:

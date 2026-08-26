@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 120" role="img" aria-label="LocalYokel">
+  <rect width="720" height="120" fill="#111111"/>
+  <text x="36" y="78" font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif" font-size="56" font-weight="700" fill="#F5A623" letter-spacing="1">Local</text>
+  <text x="232" y="78" font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif" font-size="56" font-weight="700" fill="#2EC4B6" letter-spacing="1">Yokel</text>
+</svg>

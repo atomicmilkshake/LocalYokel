@@ -57,6 +57,10 @@ class EngineConfig:
     cuda_graph_bs: List[int] | None = None
     cuda_graph_max_bs: int | None = None
     page_size: int = 1
+    # KV storage codec for dense/full-attention pools only. f16 (default) is the
+    # safe path. tq4 is TurboQuant nibble-packed 4-bit KV (WHT + Lloyd-Max).
+    # DSV4/MLA/DSA/BSA ignore this.
+    kv_quant: str = "f16"
     memory_ratio: float = 0.9
     # Hybrid GDN models default to the HybridRadixCache (cross-request GDN-state prefix reuse);
     # `--cache-type naive` opts out. linear_state_cache_ratio sizes the GDN snapshot cache as

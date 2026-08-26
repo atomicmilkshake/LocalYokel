@@ -55,10 +55,13 @@ def iter_weight_files(model_path: str) -> list[str]:
 
 def drop_page_cache(path: str) -> None:
     """drop a file's page cache: banks + full checkpoint cache don't both fit in host RAM (OOM)."""
+    advise = getattr(os, "posix_fadvise", None)
+    if advise is None:
+        return
     try:
         fd = os.open(path, os.O_RDONLY)
         try:
-            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+            advise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
         finally:
             os.close(fd)
     except OSError:

@@ -349,6 +349,9 @@ class Engine:
         self.ctx.kv_cache = self.kv_cache = create_kv_pool(
             config, self.num_pages, device=self.device, dtype=self.dtype
         )
+        require = getattr(self.kv_cache, "require_cuda_codec", None)
+        if callable(require):
+            require()
 
         # ======================= Linear (GatedDeltaNet) state initialization ========================
         linear_group = config.model_config.linear_attention_group()

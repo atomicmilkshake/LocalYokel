@@ -61,6 +61,42 @@ def _generic_config(num_page_override=None):
     )
 
 
+def test_mha_tq4_kv_cost_prices_codes_norms_scratch_per_page():
+    """tq4 cache_per_page is packed-4bit codes (0.5 B/elem) + fp16 norms + scratch.
+
+    Scratch scales with P so it belongs in cache_per_page, not fixed. Default f16
+    pin above stays byte-identical.
+    """
+    from freetoken.kvcache.mha_pool import MHAKVCache, _per_int_bytes
+
+    config = _generic_config()
+    config.kv_quant = "tq4"
+    (spec,) = config.model_config.kv_cache_group_specs()
+    H, hd, L, ps = spec.num_kv_heads, spec.head_dim, spec.num_layers, config.page_size
+    assert _per_int_bytes("tq4") == 0.5
+    codes_norms = 2 * (H * (hd // 2) + H * 2) * L  # K+V packed-4bit codes + fp16 norms
+    scratch = 2 * H * hd * 2  # one-layer fp16 K+V scratch
+    per_page, fixed, page_tokens, min_res = MHAKVCache.kv_cost(config)
+    assert fixed == 0 and page_tokens == ps and min_res == 0
+    assert per_page == (codes_norms + scratch) * ps
+
+
+def test_codec_never_reaches_dsv4_mla_dsa_bsa():
+    import inspect
+
+    from freetoken.kvcache.bsa_pool import BSAKVCache
+    from freetoken.kvcache.dsa_pool import DSAKVCache, MLAKVCache
+    from freetoken.kvcache.dsv4_paged_pool import DSV4PagedKVCache
+    from freetoken.kvcache.hybrid_swa_pool import HybridSWAKVCache
+    from freetoken.kvcache.mha_pool import MHAKVCache
+
+    assert "kv_quant" in inspect.signature(MHAKVCache.__init__).parameters
+    for cls in (DSAKVCache, MLAKVCache, DSV4PagedKVCache, BSAKVCache, HybridSWAKVCache):
+        assert "kv_quant" not in inspect.signature(cls.__init__).parameters
+    assert BSAKVCache._SUPPORT_CODEC is False
+    assert MHAKVCache._SUPPORT_CODEC is True
+
+
 def test_generic_kv_cost_and_solve_parity():
     from freetoken.kvcache.base import spec_kv_bytes_per_token
     from freetoken.kvcache.mha_pool import MHAKVCache

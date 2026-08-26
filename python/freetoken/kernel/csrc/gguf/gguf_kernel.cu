@@ -1,9 +1,41 @@
 // Adatped from
 // https://github.com/vllm-project/vllm/blob/755ed7b05be4743237d3339c4ff8c22bcaae04f4/csrc/quantization/gguf/gguf_kernel.cu
+#ifdef _WIN32
+// rpcndr.h `#define small char` rewrites torch/CUDA `bool small` params.
+// Poison the include guards so later windows.h/rpcndr.h pulls skip the macro.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef __RPCNDR_H__
+#define __RPCNDR_H__
+#endif
+#ifndef __RPCNDR_H_VERSION__
+#define __RPCNDR_H_VERSION__ 500
+#endif
+#include <windows.h>
+#ifdef small
+#undef small
+#endif
+#ifdef SMALL
+#undef SMALL
+#endif
+#endif
 #include <c10/cuda/CUDAGuard.h>
+#ifdef small
+#undef small
+#endif
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#ifdef small
+#undef small
+#endif
 #include <torch/all.h>
+#ifdef small
+#undef small
+#endif
 
 // dont use clang-format here, it breaks the include order
 // clang-format off

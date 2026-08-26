@@ -27,6 +27,12 @@ from .mha_pool import MHAKVCache
 class BSAKVCache(MHAKVCache):
     """MHA paged pool + the block-sparse index-key slab.
 
+    TurboQuant (tq4) is MHA/full only. BSA keeps fp16 K/V; inheriting
+    MHAKVCache._SUPPORT_CODEC would silently compress MiniMax-M3 slabs.
+    """
+
+    _SUPPORT_CODEC = False
+
     ``index_k_cache(slot)`` is row-flat ``[num_pages * page_size,
     index_head_dim]`` addressed by the same physical token rows as the K/V
     slabs (the shared page table is page_size=1 semantics), so the backend's

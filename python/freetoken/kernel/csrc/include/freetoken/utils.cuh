@@ -10,6 +10,14 @@
 #include <source_location>
 #include <type_traits>
 
+#ifndef __always_inline
+#if defined(_MSC_VER) && !defined(__clang__)
+#define __always_inline __forceinline
+#else
+#define __always_inline inline __attribute__((always_inline))
+#endif
+#endif
+
 namespace device {
 
 inline constexpr auto kWarpThreads = 32u;

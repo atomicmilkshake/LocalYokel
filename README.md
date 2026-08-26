@@ -1,4 +1,26 @@
 <div align="center">
+  <img alt="LocalYokel" src="assets/localyokel-icon.jpg" width="220">
+  <h1>LocalYokel</h1>
+  <p>Local MoE-offload inference. Built on FreeToken.</p>
+</div>
+
+<p align="center">
+| <a href="CREDITS.md"><b>Credits</b></a> | <a href="https://github.com/FlashML-org/FreeToken"><b>FreeToken</b></a> | <a href="https://github.com/vcruz305/FreeToken"><b>Cruz fork</b></a> | <a href="https://arxiv.org/abs/2608.16157"><b>FreeToken paper</b></a> |
+</p>
+
+LocalYokel is a **derivative** of [FlashML FreeToken](https://github.com/FlashML-org/FreeToken) (Apache 2.0) plus [Cruz's GGUF/Qwen fork](https://github.com/vcruz305/FreeToken). The Python package is still `freetoken`; the product name and CLI are `localyokel`. See [NOTICE](NOTICE) and [CREDITS.md](CREDITS.md).
+
+```bash
+pip install -e .
+localyokel serve --model <nvfp4-or-gguf> --moe-backend offload --kv-quant tq4
+```
+
+`ft` remains as the upstream command name.
+
+---
+
+<div align="center">
+  <p><em>Upstream FreeToken marks (FlashML)</em></p>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/FlashML-org/FreeToken/main/assets/freetoken-logo-dark.svg">
     <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/FlashML-org/FreeToken/main/assets/freetoken-logo-light.svg">
@@ -7,7 +29,7 @@
 </div>
 
 <p align="center">
-| <a href="https://www.flashml.ai/"><b>Download</b></a> | <a href="https://arxiv.org/abs/2608.16157"><b>Paper</b></a> | <a href="https://join.slack.com/t/flashml/shared_invite/zt-3zpdh5j10-9dwTXrgLiqpVxizhA9KVbA"><b>Developer Slack</b></a> | <a href="https://discord.gg/xzwSnMdsX"><b>Community Discord</b></a> | <a href="https://github.com/FlashML-org/FreeToken/blob/main/assets/freetoken-wechatgroup.png"><b>Community WeChat</b></a> |
+| <a href="https://www.flashml.ai/"><b>FlashML Download</b></a> | <a href="https://arxiv.org/abs/2608.16157"><b>Paper</b></a> | <a href="https://join.slack.com/t/flashml/shared_invite/zt-3zpdh5j10-9dwTXrgLiqpVxizhA9KVbA"><b>Developer Slack</b></a> | <a href="https://discord.gg/xzwSnMdsX"><b>Community Discord</b></a> | <a href="https://github.com/FlashML-org/FreeToken/blob/main/assets/freetoken-wechatgroup.png"><b>Community WeChat</b></a> |
 </p>
 
 

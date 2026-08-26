@@ -86,14 +86,12 @@ def _lm_head_quant(hf_config: Any) -> str:
 
 
 def _dense_mlp_quant(hf_config: Any) -> str:
-    """NVFP4 on the *dense* (non-MoE) decoder MLP. modelopt MIXED_PRECISION dense checkpoints
-    (e.g. Qwen3.6-27B-NVFP4) list ``.mlp.{gate,up,down}_proj`` as ``W4A16_NVFP4`` in
-    ``quantized_layers``; MoE checkpoints have ``.mlp.experts.*`` / ``.mlp.shared_expert.*``
-    instead (covered by ``expert_quant``). ``endswith(".mlp.gate_proj")`` matches only the bare
-    dense MLP -- not ``.mlp.shared_expert.gate_proj`` nor ``.mlp.experts.N.gate_proj``."""
     get = _quant_accessor(hf_config)
     if get is None:
         return "none"
+    algo = str(get("quant_algo") or get("quant_method") or "").lower()
+    if "fp4" in algo or "nvfp4" in algo:
+        return "nvfp4"
     layers = get("quantized_layers") or {}
     if not isinstance(layers, dict):
         return "none"

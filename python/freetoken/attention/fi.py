@@ -218,6 +218,9 @@ class FlashInferBackend(BaseAttnBackend):
         assert isinstance(metadata, FIMetadata)
         self._initialize_metadata_once(metadata)
         self.kvcache.store_kv(k, v, batch.out_loc, layer_id)
+        mat = getattr(self.kvcache, "materialize", None)
+        if callable(mat):
+            mat(layer_id, metadata.indices)
         kv_cache = (self.kvcache.k_cache(layer_id), self.kvcache.v_cache(layer_id))
         kv_cache = (_flatten_cache(kv_cache[0]), _flatten_cache(kv_cache[1]))
         return metadata.wrapper.run(q=q, paged_kv_cache=kv_cache)

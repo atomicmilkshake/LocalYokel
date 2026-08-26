@@ -1,0 +1,20 @@
+LocalYokel
+Copyright 2026 atomicmilkshake
+
+This product is a derivative work of FreeToken.
+
+FreeToken
+Copyright FlashML / FlashML-org
+https://github.com/FlashML-org/FreeToken
+https://www.flashml.ai/
+
+Substantial GGUF, Qwen3.5/3.6, and multi-shard work in this lineage
+comes from Cruz (vcruz305):
+https://github.com/vcruz305/FreeToken
+https://huggingface.co/vcruz305
+
+LocalYokel adds Windows MSVC/CUDA bring-up, TurboQuant tq4 KV codec
+integration, and lab packaging. The Python import path remains
+`freetoken` for compatibility with upstream.
+
+Licensed under the Apache License, Version 2.0. See LICENSE.

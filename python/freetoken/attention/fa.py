@@ -67,6 +67,9 @@ class FlashAttentionBackend(BaseAttnBackend):
         metadata = batch.attn_metadata
         assert isinstance(metadata, FAMetadata)
         self.kvcache.store_kv(k, v, batch.out_loc, layer_id)
+        mat = getattr(self.kvcache, "materialize", None)
+        if callable(mat):
+            mat(layer_id, metadata.page_table)
         return _fa_sgl_impl(
             q=q,
             k_cache=self.kvcache.k_cache(layer_id),

@@ -227,3 +227,11 @@ benchmarks/cross_framework
 
 # local e2e/bench artifacts (harnesses may run with repo cwd)
 /results/
+
+# Lab / Windows bring-up (do not ship)
+.webui_secret_key
+scripts/openwebui-data/
+scripts/humaneval_*.json
+scripts/HumanEval.jsonl
+python/freetoken/kernel/_pinned_tensor*.pyd
+*.pyd

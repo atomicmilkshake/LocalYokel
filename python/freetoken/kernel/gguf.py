@@ -52,6 +52,20 @@ def _module():
     from torch.utils.cpp_extension import load
 
     extra_cuda_cflags = ["-O3", "--expt-relaxed-constexpr"]
+    extra_cflags: list[str] = []
+    if os.name == "nt":
+        # CUDA 13.2 CCCL requires the conforming MSVC preprocessor. Pair with
+        # `#undef small` in gguf_kernel.cu (Windows rpcndr.h vs torch `bool small`).
+        extra_cuda_cflags += [
+            "-DUSE_CUDA",
+            "-Xcompiler",
+            "/Zc:preprocessor",
+            "-Xcompiler",
+            "/Usmall",
+            "-Xcompiler",
+            "/USMALL",
+        ]
+        extra_cflags += ["/DUSE_CUDA", "/Zc:preprocessor", "/Usmall", "/USMALL"]
     host_cxx = _host_compiler()
     if host_cxx is not None:
         # Point both nvcc's host pass (-ccbin) and torch's C++ compile (CXX) at a
@@ -69,6 +83,7 @@ def _module():
         sources=[str(_CSRC / "gguf_kernel.cu")],
         extra_include_paths=[str(_CSRC)],
         extra_cuda_cflags=extra_cuda_cflags,
+        extra_cflags=extra_cflags or None,
         verbose=True,
     )
 

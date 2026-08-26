@@ -148,7 +148,13 @@ class TritonAttentionBackend(BaseAttnBackend):
         metadata = batch.attn_metadata
         assert isinstance(metadata, TritonMetadata)
         self.kvcache.store_kv(k, v, batch.out_loc, layer_id)
-
+        mat = getattr(self.kvcache, "materialize", None)
+        if callable(mat):
+            pt = getattr(metadata, "page_table", None)
+            if pt is None:
+                pt = getattr(metadata, "indices", None)
+            if pt is not None:
+                mat(layer_id, pt)
         k_raw = self.kvcache.k_cache(layer_id)
         v_raw = self.kvcache.v_cache(layer_id)
         kv_heads, head_dim = k_raw.shape[-2], k_raw.shape[-1]

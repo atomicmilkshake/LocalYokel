@@ -50,12 +50,24 @@ class ServerArgs(SchedulerConfig):
 
     @property
     def zmq_frontend_addr(self) -> str:
+        if os.name == "nt":
+            import re
+            match = re.search(r"\d+", self._unique_suffix)
+            pid_val = int(match.group(0)) if match else 20000
+            port = 20000 + ((pid_val % 1000) * 10) + 3
+            return f"tcp://127.0.0.1:{port}"
         return "ipc:///tmp/freetoken_3" + self._unique_suffix
 
     @property
     def zmq_tokenizer_addr(self) -> str:
         if self.share_tokenizer:
             return self.zmq_detokenizer_addr
+        if os.name == "nt":
+            import re
+            match = re.search(r"\d+", self._unique_suffix)
+            pid_val = int(match.group(0)) if match else 20000
+            port = 20000 + ((pid_val % 1000) * 10) + 4
+            return f"tcp://127.0.0.1:{port}"
         result = "ipc:///tmp/freetoken_4" + self._unique_suffix
         assert result != self.zmq_detokenizer_addr
         return result
@@ -362,6 +374,15 @@ def parse_args(
         type=int,
         default=ServerArgs.page_size,
         help="Set the page size for system management.",
+    )
+
+    parser.add_argument(
+        "--kv-quant",
+        dest="kv_quant",
+        choices=["f16", "tq2", "tq3", "tq4"],
+        default=getattr(ServerArgs, "kv_quant", "f16"),
+        help="Dense/full-attention KV storage: f16 (default) or TurboQuant tq2/tq3/tq4. "
+        "tq4 is packed 4-bit (WHT + Lloyd-Max). Ignored for DSV4/MLA/DSA/BSA.",
     )
 
     parser.add_argument(

@@ -7,15 +7,19 @@ requires = ["setuptools>=77", "torch>=2.11,<2.12", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "freetoken"
+name = "localyokel"
 # Single source of truth: python/freetoken/version.py (read via the attr directive below).
 dynamic = ["version"]
-description = "Local MoE-offload LLM inference runtime with OpenAI- and Anthropic-compatible APIs"
+description = "LocalYokel: FreeToken-based local MoE-offload LLM runtime (Windows-friendly, opt-in tq4 KV)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-authors = [{ name = "FlashML Team" }]
+authors = [
+    { name = "FlashML Team" },
+    { name = "vcruz305" },
+    { name = "atomicmilkshake" },
+]
 # No License:: classifier: setuptools>=77 rejects mixing one with the SPDX string above.
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -62,11 +66,14 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/FlashML-org/FreeToken"
-Repository = "https://github.com/FlashML-org/FreeToken"
-Issues = "https://github.com/FlashML-org/FreeToken/issues"
+Homepage = "https://github.com/atomicmilkshake/LocalYokel"
+Repository = "https://github.com/atomicmilkshake/LocalYokel"
+Issues = "https://github.com/atomicmilkshake/LocalYokel/issues"
+Upstream-FreeToken = "https://github.com/FlashML-org/FreeToken"
+Cruz-fork = "https://github.com/vcruz305/FreeToken"
 
 [project.scripts]
+localyokel = "freetoken.cli:main"
 ft = "freetoken.cli:main"
 
 [project.optional-dependencies]

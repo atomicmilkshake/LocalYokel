@@ -8,6 +8,9 @@ import signal
 import threading
 import time
 import uuid
+
+if os.name == "nt":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Literal
@@ -1037,4 +1040,4 @@ def run_api_server(config: ServerArgs, start_backend: Callable[[], "Any"], run_s
         _serve_and_run_shell(host, port)
         return
     # uvicorn stays on the main thread (signal handling unchanged); ^C reaches the worker group.
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(app, host=host, port=port, loop="asyncio")
