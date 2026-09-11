@@ -20,8 +20,10 @@ upstream project.
 - Models: [huggingface.co/vcruz305](https://huggingface.co/vcruz305)
 
 Cruz widened GGUF beyond Gemma-4: Qwen3 / Qwen3.5 / Qwen3.6 (`qwen3moe`,
-`qwen35moe`, `qwen35`), DeepSeek-V4, ggml quant types, and multi-shard
-checkpoints. LocalYokel merged that work with official FreeToken.
+`qwen35moe`, `qwen35`), Qwen3.8-Flash-Next (`qwen4exp`, lightning indexer),
+DeepSeek-V4, ggml quant types (including mixed per-layer expert banks), and
+multi-shard checkpoints. LocalYokel merged that work with official FreeToken
+(QuantConfig, GLM-5.3-Flash, Qwen3.8-Flash-Next HF/FTW).
 
 ## LocalYokel (this repository)
 
