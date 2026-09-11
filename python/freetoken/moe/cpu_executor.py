@@ -1,4 +1,4 @@
-"""Python wrapper around the ``_cpu_moe`` C++ executor (--moe-backend cpu).
+"""Python wrapper around the ``_cpu_moe`` C++ executor (--moe-strategy cpu).
 
 Owns the persistent CPU worker pool, the per-batch-size pinned IO buffers, and
 the per-(layer, batch-size) host-func task descriptors. ``decode`` issues the
@@ -65,6 +65,7 @@ _ACT_IDS = {
     "gelu_pytorch_tanh": 2,
     "gpt_oss_swiglu": 3,
     "swigluoai": 3,
+    "swiglu_clamp": 4,
 }
 
 # Weight-format ids must match WFmt in csrc/cpu_moe/cpu_moe_ext.cpp.
@@ -93,28 +94,30 @@ def _resolve_gguf_format(cache) -> str:
     types = getattr(cache, "gguf_expert_types", None)
     if not types:
         raise NotImplementedError(
-            "--moe-backend cpu/hybrid needs the GGUF expert bank types, but this cache "
-            "did not record them; use --moe-backend offload."
+            "--moe-strategy cpu/hybrid needs the GGUF expert bank types, but this cache "
+            "did not record them; use --moe-strategy offload."
         )
-    gate_up, down = int(types[0]), int(types[1])
+    gate_up_types, down_types = types
+    distinct_gu = set(int(t) for t in (gate_up_types if isinstance(gate_up_types, (tuple, list)) else (gate_up_types,)))
+    distinct_dn = set(int(t) for t in (down_types if isinstance(down_types, (tuple, list)) else (down_types,)))
+    if len(distinct_gu) != 1 or distinct_gu != distinct_dn:
+        raise NotImplementedError(
+            "--moe-strategy cpu/hybrid runs one weight format for both expert banks "
+            "across every layer; mixed-type or per-layer GGUF banks need "
+            "--moe-strategy offload."
+        )
+    gate_up = distinct_gu.pop()
 
     def name(t: int) -> str:
         from freetoken.models.gguf.dequant import GGML_NAME
 
         return GGML_NAME.get(t, f"type {t}")
 
-    if gate_up != down:
-        raise NotImplementedError(
-            f"--moe-backend cpu/hybrid runs one weight format for both expert banks, but "
-            f"this checkpoint stores gate_up as {name(gate_up)} and down as {name(down)}. "
-            f"Mixed-type banks (Q4_K_M and the _M/_XXS mixes do this) need "
-            f"--moe-backend offload; a --pure requantization would also make it uniform."
-        )
     if gate_up not in _GGML_TO_CPU_FMT:
         raise NotImplementedError(
-            f"--moe-backend cpu/hybrid has no CPU kernel for {name(gate_up)} experts "
+            f"--moe-strategy cpu/hybrid has no CPU kernel for {name(gate_up)} experts "
             f"(supported: {', '.join(sorted(set(_GGML_TO_CPU_FMT.values())))}); use "
-            f"--moe-backend offload, which dequantizes on the GPU and covers every type."
+            f"--moe-strategy offload, which dequantizes on the GPU and covers every type."
         )
     return _GGML_TO_CPU_FMT[gate_up]
 
@@ -204,10 +207,12 @@ class CpuMoeExecutor:
         device: torch.device,
         swiglu_alpha: float = 1.702,
         swiglu_limit: float | None = None,
+        fmt: str | None = None,
     ) -> None:
         from freetoken.kernel import _cpu_moe
+        from freetoken.moe.legacy_format import canonical_role
 
-        fmt = cache.quant_format
+        fmt = fmt or cache.quant_format
         # "gguf" is a container tag; resolve it to the concrete per-type CPU format first so
         # everything downstream (the _WFMT_IDS gate, _resolve_banks, the C++ weight_format)
         # sees one layout name.
@@ -215,9 +220,9 @@ class CpuMoeExecutor:
             fmt = _resolve_gguf_format(cache)
         if fmt not in _WFMT_IDS:
             raise NotImplementedError(
-                f"--moe-backend cpu/hybrid computes experts on the CPU and supports "
-                f"{sorted(_WFMT_IDS.keys())} formats, but this checkpoint's experts are "
-                f"{fmt!r}; use --moe-backend offload (GPU-side dequant) instead."
+                f"--moe-strategy cpu/hybrid computes experts on the CPU and supports "
+                f"{sorted(_WFMT_IDS)} formats, but this checkpoint's experts are "
+                f"{fmt!r}; use --moe-strategy offload (GPU-side dequant) instead."
             )
         if activation not in _ACT_IDS:
             raise NotImplementedError(f"CPU MoE backend: unsupported activation {activation!r}")
@@ -245,7 +250,9 @@ class CpuMoeExecutor:
         # The per-layer tensors and their pointer tables must outlive the executor
         # (C++ holds raw addresses into both).
         self._banks: list[torch.Tensor] = []
-        ptrs, (self.H, self.I) = self._resolve_banks(cache.bank_sources, fmt)
+        ptrs, (self.H, self.I) = self._resolve_banks(
+            {canonical_role(name): per_layer for name, per_layer in cache.bank_sources.items()}, fmt
+        )
 
         # Decide the flag handshake up front (env + device + a functional stream-memop
         # probe): its coordinator needs a core of its own, which the auto thread sizing
@@ -430,8 +437,8 @@ class CpuMoeExecutor:
             return self._resolve_dsfp4_banks(banks)
 
         # nvfp4: packed e2m1 (2/byte) + fp8-e4m3 per-16 block scales + fp16 row globals.
-        gup, gus, gug = banks["gate_up_packed"], banks["gate_up_scale"], banks["gate_up_global"]
-        dnp, dns, dng = banks["down_packed"], banks["down_scale"], banks["down_global"]
+        gup, gus, gug = banks["gate_up"], banks["gate_up_scale"], banks["gate_up_global"]
+        dnp, dns, dng = banks["down"], banks["down_scale"], banks["down_global"]
         assert gup[0].dtype == torch.uint8 and dnp[0].dtype == torch.uint8, (gup[0].dtype, dnp[0].dtype)
         assert gus[0].element_size() == 1 and dns[0].element_size() == 1, "block scales must be 1 byte"
         assert gug[0].dtype == torch.float16 and dng[0].dtype == torch.float16, (gug[0].dtype, dng[0].dtype)
@@ -540,8 +547,8 @@ class CpuMoeExecutor:
         (N innermost) + per-output-row biases. The C++ kernel streams K and
         accumulates a contiguous N-block, so the GPU-tiled layout is read in place
         (no repack, no extra host memory). Block scales are e8m0 (1 byte / 32 K)."""
-        gub, gus, gob = banks["gate_up_blocks"], banks["gate_up_scales"], banks["gate_up_bias"]
-        dnb, dns, dob = banks["down_blocks"], banks["down_scales"], banks["down_bias"]
+        gub, gus, gob = banks["gate_up"], banks["gate_up_scale"], banks["gate_up_bias"]
+        dnb, dns, dob = banks["down"], banks["down_scale"], banks["down_bias"]
         assert gub[0].dtype == torch.uint8 and dnb[0].dtype == torch.uint8, (gub[0].dtype, dnb[0].dtype)
         assert gus[0].dtype == torch.uint8 and dns[0].dtype == torch.uint8, (gus[0].dtype, dns[0].dtype)
         assert gob[0].dtype == torch.bfloat16 and dob[0].dtype == torch.bfloat16, (gob[0].dtype, dob[0].dtype)
@@ -571,8 +578,8 @@ class CpuMoeExecutor:
         scales, no global, no bias. Layout matches nvfp4 (K contiguous per output row),
         so the C++ GEMV reads it in place. The kernel additionally FP8-round-trips the
         activations (block 128) to match DSV4's W4A8 reference, hence the %128 dims."""
-        gup, gus = banks["gate_up_packed"], banks["gate_up_scale"]
-        dnp, dns = banks["down_packed"], banks["down_scale"]
+        gup, gus = banks["gate_up"], banks["gate_up_scale"]
+        dnp, dns = banks["down"], banks["down_scale"]
         assert gup[0].dtype == torch.uint8 and dnp[0].dtype == torch.uint8, (gup[0].dtype, dnp[0].dtype)
         assert gus[0].element_size() == 1 and dns[0].element_size() == 1, "block scales must be 1 byte"
         I = int(gup[0].shape[1] // 2)

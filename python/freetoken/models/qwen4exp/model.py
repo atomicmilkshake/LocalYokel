@@ -94,8 +94,8 @@ class Qwen4ExpDecoderLayer(BaseOP):
                 conv_kernel_size=g.conv_kernel_dim,
                 rms_norm_eps=config.rms_norm_eps,
                 layer_id=layer_id,
-                expert_quant=config.expert_quant,
-                attn_quant=config.attn_quant,
+                quant_config=getattr(config, "quant", None),
+                prefix="linear_attn",
                 # The one numerical difference from Qwen3.5's GDN.
                 gate_activation="sigmoid",
             )

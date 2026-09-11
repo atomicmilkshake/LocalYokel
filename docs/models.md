@@ -8,10 +8,12 @@ same architectures work too.
 | Model | HF checkpoints |
 |---|---|
 | DeepSeek-V4 | [deepseek-ai/DeepSeek-V4-Flash-0731](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731) |
+| GLM-5.3-Flash | [RedHatAI/GLM-5.3-Flash-NVFP4](https://huggingface.co/RedHatAI/GLM-5.3-Flash-NVFP4) |
 | GLM-5.2 | [nvidia/GLM-5.2-NVFP4](https://huggingface.co/nvidia/GLM-5.2-NVFP4) |
 | GLM-4.7 | [nvidia/GLM-4.7-NVFP4](https://huggingface.co/nvidia/GLM-4.7-NVFP4) |
+| Qwen3.8-Flash-Next | [Qwen/Qwen3.8-Flash-Next-FP8](https://huggingface.co/Qwen/Qwen3.8-Flash-Next-FP8), [RadixArk/Qwen3.8-Flash-Next-NVFP4](https://huggingface.co/RadixArk/Qwen3.8-Flash-Next-NVFP4), [nvidia/Qwen3.8-Flash-Next-NVFP4](https://huggingface.co/nvidia/Qwen3.8-Flash-Next-NVFP4) |
 | Qwen3.6 / Qwen3.5 MoE | [Qwen/Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) ([-FP8](https://huggingface.co/Qwen/Qwen3.6-35B-A3B-FP8)), [nvidia/Qwen3.6-35B-A3B-NVFP4](https://huggingface.co/nvidia/Qwen3.6-35B-A3B-NVFP4), [Qwen/Qwen3.5-35B-A3B](https://huggingface.co/Qwen/Qwen3.5-35B-A3B) ([-FP8](https://huggingface.co/Qwen/Qwen3.5-35B-A3B-FP8)) |
-| Qwen3.6 dense | [Qwen/Qwen3.6-27B](https://huggingface.co/Qwen/Qwen3.6-27B) ([-FP8](https://huggingface.co/Qwen/Qwen3.6-27B-FP8)), [nvidia/Qwen3.6-27B-NVFP4](https://huggingface.co/nvidia/Qwen3.6-27B-NVFP4) |
+| Qwen3.8 / Qwen3.6 dense | [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) ([-FP8](https://huggingface.co/Qwen/Qwen3.8-27B-FP8)), [RadixArk/Qwen3.8-27B-NVFP4](https://huggingface.co/RadixArk/Qwen3.8-27B-NVFP4), [Qwen/Qwen3.6-27B](https://huggingface.co/Qwen/Qwen3.6-27B) ([-FP8](https://huggingface.co/Qwen/Qwen3.6-27B-FP8)), [nvidia/Qwen3.6-27B-NVFP4](https://huggingface.co/nvidia/Qwen3.6-27B-NVFP4) |
 | Qwen3-MoE | [Qwen/Qwen3-30B-A3B](https://huggingface.co/Qwen/Qwen3-30B-A3B) |
 | gpt-oss | [openai/gpt-oss-120b](https://huggingface.co/openai/gpt-oss-120b), [openai/gpt-oss-20b](https://huggingface.co/openai/gpt-oss-20b) |
 | Gemma-4 | [google/gemma-4-26B-A4B-it](https://huggingface.co/google/gemma-4-26B-A4B-it), [nvidia/Gemma-4-26B-A4B-NVFP4](https://huggingface.co/nvidia/Gemma-4-26B-A4B-NVFP4), [google/gemma-4-12B-it](https://huggingface.co/google/gemma-4-12B-it), [nvidia/Gemma-4-31B-IT-NVFP4](https://huggingface.co/nvidia/Gemma-4-31B-IT-NVFP4) .. |
@@ -28,7 +30,9 @@ the kernels rather than expanded to bf16 at load.
 | `gemma4` | Gemma-4 |
 | `qwen3moe` | Qwen3 MoE (e.g. Qwen3-235B-A22B, Qwen3-30B-A3B) |
 | `qwen35moe` | Qwen3.5 / Qwen3.6 MoE (e.g. Qwen3.6-35B-A3B, Qwen3.5-122B-A10B) |
-| `qwen35` | Qwen3.5 / Qwen3.6 dense (e.g. Qwen3.6-27B, Qwen3.5-9B) |
+| `qwen35` | Qwen3.5 / Qwen3.6 / Qwen3.8 dense (e.g. Qwen3.6-27B, Qwen3.8-27B) |
+| `qwen4exp` | Qwen3.8-Flash-Next |
+| `deepseek4` | DeepSeek-V4-Flash |
 
 Split checkpoints load: point `--model` at any shard of a `-00001-of-000NN` set, or at the
 directory holding them. Metadata, config and tokenizer are read from shard 1 (later shards
@@ -44,18 +48,15 @@ Quant types follow what the vendored kernels in `csrc/gguf/` implement:
 
 Two constraints worth knowing before picking a file:
 
-- A MoE checkpoint's routed-expert banks must use one ggml type across every layer. The GPU
-  slot pool is a single allocation with a single row stride, so a bank that changes type
-  between layers cannot be served and the load fails with the offending layers named.
-  llama.cpp's `_M` and `_XXS` levels raise the precision of the first few layers'
-  `ffn_down_exps` and hit this; `llama-quantize --pure` produces a checkpoint that loads.
-  Dense models have no expert banks and are unaffected.
+- MoE expert banks may vary ggml type by layer (llama.cpp `_M` / `_XXS` dynamic quants).
+  The GPU slot pool pads rows to the widest type. Types without an MMVQ kernel still
+  refuse to load. Dense models have no expert banks and are unaffected.
 - GGUF paths are TP=1 only, and a NextN/MTP block in the checkpoint is dropped (served
   text-only, no speculative decoding).
 
-## MoE backends
+## MoE strategies
 
-`ft serve --moe-backend {auto,fused,offload,cpu,hybrid}`:
+`ft serve --moe-strategy {auto,fused,offload,cpu,hybrid}` (`--moe-backend` is the deprecated old spelling):
 
 - **fused** — experts resident on GPU (needs the VRAM); never auto-selected.
 - **offload** — experts live in host RAM, an LRU cache of expert slots on GPU;
@@ -71,6 +72,9 @@ Two constraints worth knowing before picking a file:
 
 - `ft checkpoint` conversion is optional — it pre-converts a checkpoint into
   FreeToken's fast-load format, and `ft serve --model` auto-detects the result.
+- FTW files converted by builds before the quantization refactor may fail to load;
+  see [ftw-hotfix.md](ftw-hotfix.md) for the affected checkpoints and the repair tool.
 - DeepSeek-V4 checkpoints must keep the `inference/config.json` subdir — the
   authoritative model args are read from there.
+- Qwen3.8-Flash-Next keeps a 47.7 GiB PLE n-gram table pinned in host RAM.
 - Multimodal checkpoints are served text-only.
