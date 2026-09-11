@@ -598,6 +598,16 @@ torch::Tensor ggml_moe_a8_vec(
     int64_t tokens) {
   int col = X.sizes()[1];
   const int padded = (col + 512 - 1) / 512 * 512;
+  // W is [num_slots, nrows, row_bytes] uint8, so its own row stride is the byte distance
+  // the kernel must walk. Taking it from the tensor rather than deriving it from `type`
+  // lets a slot pool be padded to the widest layer's row, which is what makes a bank whose
+  // quant type varies by layer servable from one allocation. For an unpadded pool this is
+  // identical to the type-derived size.
+  TORCH_CHECK(W.dim() == 3, "ggml_moe_a8_vec: expected W [num_slots, nrows, row_bytes], got ",
+              W.dim(), " dims");
+  TORCH_CHECK(W.stride(2) == 1 && W.stride(1) == W.size(2),
+              "ggml_moe_a8_vec: W rows must be contiguous");
+  const int row_stride_bytes = (int)(W.stride(1) * W.element_size());
   const at::cuda::OptionalCUDAGuard device_guard(device_of(X));
   auto options = torch::TensorOptions().dtype(X.dtype()).device(W.device());
   at::Tensor Y = torch::zeros({tokens * top_k, row}, options);
@@ -618,6 +628,7 @@ torch::Tensor ggml_moe_a8_vec(
             col,
             row,
             quant_X.stride(0),
+            row_stride_bytes,
             stream);
         break;
       case 3:
@@ -631,6 +642,7 @@ torch::Tensor ggml_moe_a8_vec(
             col,
             row,
             quant_X.stride(0),
+            row_stride_bytes,
             stream);
         break;
       case 6:
@@ -644,6 +656,7 @@ torch::Tensor ggml_moe_a8_vec(
             col,
             row,
             quant_X.stride(0),
+            row_stride_bytes,
             stream);
         break;
       case 7:
@@ -657,6 +670,7 @@ torch::Tensor ggml_moe_a8_vec(
             col,
             row,
             quant_X.stride(0),
+            row_stride_bytes,
             stream);
         break;
       case 8:
@@ -670,6 +684,7 @@ torch::Tensor ggml_moe_a8_vec(
             col,
             row,
             quant_X.stride(0),
+            row_stride_bytes,
             stream);
         break;
       case 10:
@@ -683,6 +698,7 @@ torch::Tensor ggml_moe_a8_vec(
             col,
             row,
             quant_X.stride(0),
+            row_stride_bytes,
             stream);
         break;
       case 11:
@@ -696,6 +712,7 @@ torch::Tensor ggml_moe_a8_vec(
             col,
             row,
             quant_X.stride(0),
+            row_stride_bytes,
             stream);
         break;
       case 12:
@@ -709,6 +726,7 @@ torch::Tensor ggml_moe_a8_vec(
             col,
             row,
             quant_X.stride(0),
+            row_stride_bytes,
             stream);
         break;
       case 13:
@@ -722,6 +740,7 @@ torch::Tensor ggml_moe_a8_vec(
             col,
             row,
             quant_X.stride(0),
+            row_stride_bytes,
             stream);
         break;
       case 14:
@@ -735,6 +754,7 @@ torch::Tensor ggml_moe_a8_vec(
             col,
             row,
             quant_X.stride(0),
+            row_stride_bytes,
             stream);
         break;
       case 16:
@@ -748,6 +768,7 @@ torch::Tensor ggml_moe_a8_vec(
             col,
             row,
             quant_X.stride(0),
+            row_stride_bytes,
             stream);
         break;
       case 17:
@@ -761,6 +782,7 @@ torch::Tensor ggml_moe_a8_vec(
             col,
             row,
             quant_X.stride(0),
+            row_stride_bytes,
             stream);
         break;
       case 18:
@@ -774,6 +796,7 @@ torch::Tensor ggml_moe_a8_vec(
             col,
             row,
             quant_X.stride(0),
+            row_stride_bytes,
             stream);
         break;
       case 19:
@@ -787,6 +810,7 @@ torch::Tensor ggml_moe_a8_vec(
             col,
             row,
             quant_X.stride(0),
+            row_stride_bytes,
             stream);
         break;
       case 20:
@@ -800,6 +824,7 @@ torch::Tensor ggml_moe_a8_vec(
             col,
             row,
             quant_X.stride(0),
+            row_stride_bytes,
             stream);
         break;
       case 21:
@@ -813,6 +838,7 @@ torch::Tensor ggml_moe_a8_vec(
             col,
             row,
             quant_X.stride(0),
+            row_stride_bytes,
             stream);
         break;
       case 22:
@@ -826,6 +852,7 @@ torch::Tensor ggml_moe_a8_vec(
             col,
             row,
             quant_X.stride(0),
+            row_stride_bytes,
             stream);
         break;
       case 23:
@@ -839,6 +866,7 @@ torch::Tensor ggml_moe_a8_vec(
             col,
             row,
             quant_X.stride(0),
+            row_stride_bytes,
             stream);
         break;
       case 29:
@@ -852,6 +880,7 @@ torch::Tensor ggml_moe_a8_vec(
             col,
             row,
             quant_X.stride(0),
+            row_stride_bytes,
             stream);
         break;
       default:

@@ -306,30 +306,29 @@ def _gguf_banks(model_path, model_config, device, dtype, dummy, parallel=False, 
 
     sink = None if dummy else layer_sink
     types = types_fn(model_path, model_config.num_layers)
-    # One pool per bank is shared by every layer, and moe_vec.cuh addresses it without a
-    # padding allowance, so a bank whose type varies by layer cannot be served. Reject it
-    # here with the layers named rather than reading every block at the wrong offset.
+    # A bank's type may vary by layer -- llama.cpp's dynamic quants (unsloth's UD-* family)
+    # raise the precision of a handful of layers on purpose. The slot pool stays a single
+    # allocation, but its rows are padded to the widest layer's row_bytes and moe_vec.cuh
+    # walks them by an explicit byte stride, so several types can share one pool. What is
+    # still required is that every type present has an MMVQ kernel at all.
+    from freetoken.models.gguf.dequant import MOE_VEC_TYPES
+
     resolved = {}
     for name in ("gate_up", "down"):
-        distinct = sorted(set(types[name]))
-        if len(distinct) != 1:
+        per_layer = tuple(int(t) for t in types[name])
+        unsupported = sorted(set(per_layer) - set(MOE_VEC_TYPES))
+        if unsupported:
             from freetoken.models.gguf.dequant import GGML_NAME
 
-            spread = {
-                GGML_NAME.get(t, t): [i for i, x in enumerate(types[name]) if x == t]
-                for t in distinct
+            where = {
+                GGML_NAME.get(t, t): [i for i, x in enumerate(per_layer) if x == t]
+                for t in unsupported
             }
             raise NotImplementedError(
-                f"GGUF expert bank {name!r} mixes ggml types across layers ({spread}). "
-                f"The offload slot pool is a single allocation shared by every layer and "
-                f"moe_vec.cuh addresses it as expert * nrows * (ncols / qk) with no padding "
-                f"allowance, so one pool cannot hold two row strides. "
-                f"llama.cpp's mixed quant levels (the *_M and *_XXS families) raise the "
-                f"precision of the first few layers' ffn_down_exps, which is what trips this. "
-                f"Re-quantize with `llama-quantize --pure` to get one type throughout, or pick "
-                f"a level that is already uniform."
+                f"GGUF expert bank {name!r} uses quant types with no MMVQ kernel: {where}. "
+                f"Supported: {sorted(MOE_VEC_TYPES)}."
             )
-        resolved[name] = distinct[0]
+        resolved[name] = per_layer
 
     sources = loader(model_path, model_config, layer_sink=sink)
     return ExpertBanks(
@@ -478,8 +477,18 @@ def bank_bytes_estimate(model_config) -> int | None:
             return None
         from freetoken.models.gguf.dequant import row_bytes
 
-        t_gate_up, t_down = types
-        per = 2 * inter * row_bytes(hidden, t_gate_up) + hidden * row_bytes(inter, t_down)
+        # Types are per-layer, and the pool pads every row to the widest type in its bank
+        # (rounded to 8 when a bank is genuinely mixed), so the estimate has to use that
+        # padded stride or it under-counts a dynamic quant and the residency planner picks
+        # a cache that does not fit.
+        gate_up_types, down_types = types
+        gu = max(row_bytes(hidden, int(t)) for t in gate_up_types)
+        dn = max(row_bytes(inter, int(t)) for t in down_types)
+        if len(set(gate_up_types)) > 1:
+            gu = (gu + 7) // 8 * 8
+        if len(set(down_types)) > 1:
+            dn = (dn + 7) // 8 * 8
+        per = 2 * inter * gu + hidden * dn
         return layers * experts * per
     per_expert = _BANK_BYTES_PER_EXPERT.get(fmt)
     if per_expert is None:
