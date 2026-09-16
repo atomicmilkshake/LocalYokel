@@ -1883,6 +1883,28 @@ class DeepSeekV32Detector(BaseFormatDetector):
         return residual
 
 
+_QWEN3_NAME_ATTR = re.compile(
+    r"<(function|parameter)\s+name\s*=\s*\"([^\"]+)\"\s*>",
+    re.IGNORECASE,
+)
+
+
+def _canonical_qwen3_xml(text: str) -> str:
+    """Ornith/Qwen3.5 sometimes emits ``<parameter name="x">`` instead of ``<parameter=x>``."""
+    return _QWEN3_NAME_ATTR.sub(lambda m: f"<{m.group(1).lower()}={m.group(2)}>", text)
+
+
+def _promote_bare_qwen3_function(text: str) -> str:
+    """Follow-up turns often skip ``<tool_call>`` and start at ``<function=`` (or a stray closer)."""
+    t = text.lstrip()
+    closer = "</tool_call>"
+    while t.startswith(closer):
+        t = t[len(closer) :].lstrip()
+    if "<function=" in t and "<tool_call>" not in t:
+        return "<tool_call>" + t
+    return t
+
+
 class Qwen3CoderDetector(InvokeParamStreamMixin, BaseFormatDetector):
     toolcall_opener = "<tool_call>"
     _ps_trim = "\n"
@@ -1940,7 +1962,28 @@ class Qwen3CoderDetector(InvokeParamStreamMixin, BaseFormatDetector):
         self._ps_reset()
 
     def has_tool_call(self, text: str) -> bool:
-        return "<function=" in text or self.bot_token in text
+        t = _canonical_qwen3_xml(text)
+        return "<function=" in t or self.bot_token in t
+
+    def parse_streaming_increment(self, new_text: str, tools: List[Tool]) -> StreamingParseResult:
+        # Hold an incomplete `<...` tag so `<function name="bash">` can be rewritten
+        # to `<function=bash>` before the mixin sees it. Empty increments (the
+        # serving drain loop) must not flush that hold.
+        if new_text:
+            self._alias_hold = getattr(self, "_alias_hold", "") + new_text
+            self._alias_hold = _canonical_qwen3_xml(self._alias_hold)
+            hold = self._alias_hold
+            lt = hold.rfind("<")
+            if lt != -1 and ">" not in hold[lt:]:
+                emit, self._alias_hold = hold[:lt], hold[lt:]
+            else:
+                emit, self._alias_hold = hold, ""
+            if not emit:
+                return StreamingParseResult()
+            if getattr(self, "_ps_mode", "idle") == "idle":
+                emit = _promote_bare_qwen3_function(emit)
+            return InvokeParamStreamMixin.parse_streaming_increment(self, emit, tools)
+        return InvokeParamStreamMixin.parse_streaming_increment(self, "", tools)
 
 
     def _parse_function_call(self, function_str: str, tools: List[Tool]) -> Optional[ToolCallItem]:
@@ -2024,6 +2067,7 @@ class Qwen3CoderDetector(InvokeParamStreamMixin, BaseFormatDetector):
         return json.dumps(param_dict, ensure_ascii=False)
 
     def detect_and_parse(self, text: str, tools: List[Tool]) -> StreamingParseResult:
+        text = _promote_bare_qwen3_function(_canonical_qwen3_xml(text))
         idx = text.find(self.bot_token)
         normal_text = text[:idx].strip() if idx != -1 else text
 

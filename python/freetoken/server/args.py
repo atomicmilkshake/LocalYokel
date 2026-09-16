@@ -210,6 +210,8 @@ def parse_args(
         if (
             "qwen3_5" in marker
             or "qwen3.5" in marker
+            or "qwen35" in marker
+            or "ornith" in marker
             or ("qwen3" in marker and "coder" in marker)
         ):
             return "qwen3_coder"
@@ -250,7 +252,13 @@ def parse_args(
             return "deepseekv32"
         if "qwen4_exp" in marker or "qwen4exp" in marker or "qwen3.8-flash" in marker:
             return "qwen3"
-        if "qwen3" in marker or "qwen3.5" in marker or "qwen3_5" in marker:
+        if (
+            "qwen3" in marker
+            or "qwen3.5" in marker
+            or "qwen3_5" in marker
+            or "qwen35" in marker
+            or "ornith" in marker
+        ):
             return "qwen3"
         if "glm" in marker:
             return "glm"

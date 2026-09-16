@@ -396,11 +396,9 @@ class ThinkReasoningParser(BaseReasoningParser):
     chain-of-thought in think tags (Qwen3/3.5, GLM-4.x, MiniMax-M2). No DSML tool
     marker — reasoning ends at ``</think>``.
 
-    Assumes the model closes ``</think>`` before any tool call. These families do
-    so in well-formed thinking mode; unlike dsv4 there is no ``tool_start_token``
-    fallback, so a (malformed) turn that skips ``</think>`` and runs straight into
-    a tool call would fold that block into reasoning. Add a family-appropriate
-    ``tool_start_token`` (as ``DeepSeekV32ReasoningParser`` does) if that surfaces.
+    Assumes the model closes ``</think>`` before any tool call. If a turn skips
+    ``</think>`` and opens ``<tool_call>``, reasoning ends there so the tool
+    parser still sees the block (same fallback DeepSeekV32 uses for DSML).
     """
 
     def __init__(self, force_reasoning: bool = False, stream_reasoning: bool = True) -> None:
@@ -409,6 +407,7 @@ class ThinkReasoningParser(BaseReasoningParser):
             think_end_token=THINK_END_TOKEN,
             force_reasoning=force_reasoning,
             stream_reasoning=stream_reasoning,
+            tool_start_token="<function=",
         )
 
 

@@ -492,7 +492,17 @@ class Engine:
         )
         if config.attention_backend.split(",")[0] == "triton":
             # Prefill runs on the first comma part; warm its autotune cache.
-            self._warmup_prefill()
+            import os
+
+            if os.getenv("FREETOKEN_SKIP_PREFILL_WARMUP", "").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }:
+                logger.info("Skipping triton prefill warmup (FREETOKEN_SKIP_PREFILL_WARMUP)")
+            else:
+                self._warmup_prefill()
 
     def _init_communication(self, config: EngineConfig) -> torch.distributed.ProcessGroup:
         if config.tp_info.size == 1 or config.use_pynccl:

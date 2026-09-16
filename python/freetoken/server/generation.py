@@ -418,10 +418,24 @@ def _split_reasoning(text: str, spec: GenSpec, state: Any) -> tuple[str, str]:
     return parser.parse_non_stream(text)
 
 
+_QWEN_LEAKED_SPECIALS = [
+    "<|mask_end|>",
+    "<|mask_start|>",
+    "<|fim_prefix|>",
+    "<|fim_middle|>",
+    "<|fim_suffix|>",
+    "<|fim_pad|>",
+]
+
+
 def _leaked_special_tokens(state: Any) -> list[str]:
-    """Special-token strings to strip from output. Empty (no-op) unless the dsv4
-    reasoning parser is configured, so non-dsv4 output is untouched."""
-    return DSV4_SPECIAL_TOKENS if getattr(state.config, "reasoning_parser", None) == "deepseekv32" else []
+    """Special-token strings to strip from output."""
+    parser = getattr(state.config, "reasoning_parser", None)
+    if parser == "deepseekv32":
+        return DSV4_SPECIAL_TOKENS
+    if parser == "qwen3":
+        return _QWEN_LEAKED_SPECIALS
+    return []
 
 
 def _make_tool_parser(spec: GenSpec, state: Any) -> FunctionCallParser:
