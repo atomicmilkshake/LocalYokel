@@ -211,6 +211,7 @@ def load_weight(
     device: torch.device,
     *,
     include_moe_experts: bool = True,
+    include_vision: bool = True,
 ) -> Iterator[Tuple[str, torch.Tensor]]:
     # FTW checkpoint: dense weights are stored post-iter_weights, so we replay them
     # model-agnostically instead of re-running the per-model reader. Which tensors exist is
@@ -218,28 +219,47 @@ def load_weight(
     # fails loudly in load_state_dict (strict missing/unexpected expert keys), so the reader
     # just yields the stored weight tensors regardless of the include_moe_experts flag.
     from freetoken.checkpoint.ftw import is_ftw_checkpoint, iter_ftw_weights
-    from freetoken.models.config import VISION_KEY_PREFIXES, vision_load_enabled
+    from freetoken.models.config import VISION_KEY_PREFIXES
 
+    # a text-only engine never built the tower, so its tensors are not even read
+    keep = None if include_vision else (lambda name: not name.startswith(VISION_KEY_PREFIXES))
     if is_ftw_checkpoint(model_path):
-        # The FTW dense shard stores whatever existed at conversion, including the vision
-        # stack. Vision is opt-in (default OFF, see vision_load_enabled): when it is off the
-        # model never builds the tower, so replaying those tensors would trip load_state_dict's
-        # strict unexpected-key check. Skip them here to match the model the engine built.
-        skip_vision = not vision_load_enabled()
-        for name, tensor in iter_ftw_weights(model_path):
-            if skip_vision and name.startswith(VISION_KEY_PREFIXES):
-                continue
-            yield name, tensor
-        return
+        weights = iter_ftw_weights(model_path, keep=keep)
+    else:
+        _config, spec = _spec_for_model_path(model_path)
+        iter_weights = _load_attr(spec.module, spec.iter_weights)
+        # only a family that registers an encoder is asked about the tower; the others never load one
+        kwargs = {"include_vision": include_vision} if spec.encoders else {}
+        weights = iter_weights(
+            model_path,
+            device,
+            include_moe_experts=include_moe_experts,
+            include_non_moe=True,
+            **kwargs,
+        )
+    for name, tensor in weights:
+        if keep is not None and not keep(name):
+            continue
+        yield name, tensor
 
+
+def load_vision_weight(model_path: str, device: torch.device) -> Iterator[Tuple[str, torch.Tensor]]:
+    """The vision encoder tensors alone, named as load_weight names them, read by the family's encoder-only reader."""
     _config, spec = _spec_for_model_path(model_path)
-    iter_weights = _load_attr(spec.module, spec.iter_weights)
-    yield from iter_weights(
-        model_path,
-        device,
-        include_moe_experts=include_moe_experts,
-        include_non_moe=True,
-    )
+    reader = _model_override(spec, "iter_vision_weights")
+    if reader is None:
+        raise ValueError(f"{spec.module} has no encoder-only weight reader")
+    return reader(model_path, device)
+
+
+def ftw_lacks_vision(model_path: str) -> bool:
+    """True for an FTW that holds no vision encoder tensors: converted by a build before the family served images."""
+    from freetoken.checkpoint.ftw import ftw_tensor_names, is_ftw_checkpoint
+    from freetoken.models.config import VISION_KEY_PREFIXES
+
+    if not is_ftw_checkpoint(model_path):
+        return False
+    return not any(name.startswith(VISION_KEY_PREFIXES) for name in ftw_tensor_names(model_path, "weight"))
 
 
 def load_q4_0_moe_expert_sources(
@@ -262,6 +282,8 @@ def load_q4_0_moe_expert_sources(
 
 __all__ = [
     "load_weight",
+    "load_vision_weight",
+    "ftw_lacks_vision",
     "load_q4_0_moe_expert_sources",
     "iter_expert_tensors_parallel",
 ]

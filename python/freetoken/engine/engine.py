@@ -14,7 +14,9 @@ from freetoken.gpu_select import gpu_identity
 from freetoken.layers import set_rope_device
 from freetoken.layers.quantization import LayerKind, QuantBackend, finalize_quant, set_quant_backend
 from freetoken.moe.offload_cache import iter_offload_moe_layers
+from freetoken.mm.config import ENCODER_SECTIONS
 from freetoken.models import create_model, load_weight
+from freetoken.models.weight import ftw_lacks_vision
 from freetoken.moe import is_offload_moe_strategy
 from freetoken.moe.expert_banks import load_expert_banks
 from freetoken.moe.host_banks import PinFailed
@@ -37,6 +39,7 @@ logger = init_logger(__name__)
 # so the window is coarse; it is short enough that a normal-length reply still produces a
 # few reports rather than one at the very end.
 MOE_STATS_INTERVAL = 256
+
 
 
 def _require_offload_cache_size(cache_size: int, num_experts: int) -> None:
@@ -286,6 +289,9 @@ def _materialize_loaded_weight_state_dict(
     for key, weight in weights:
         expected = model_state.get(key)
         if expected is None:
+            # NOTE: the quant scheme may declare no input_scale for a layer whose FTW still stores one
+            if key.endswith(".input_scale"):
+                continue
             state_dict[key] = weight.to(device=device)
         else:
             state_dict[key] = weight.to(device=device, dtype=expected.dtype)
@@ -333,6 +339,16 @@ class Engine:
             self.model = create_model(config.model_config)
         self.model.load_state_dict(self._load_weight_state_dict(config))
         finalize_quant(self.model)
+        if config.active_encoders:
+            from freetoken.models.blocks import SupportsMultimodal
+
+            if not isinstance(self.model, SupportsMultimodal):
+                raise TypeError(
+                    f"{type(self.model).__name__} has encoders registered but lacks the SupportsMultimodal hooks; "
+                    "run with --text-model-only"
+                )
+            # before the residency snapshot, so streamed blocks are not charged as resident weights
+            self.model.place_encoder_weights(config.mm.encoder_weights)
         post_weights_free = self._sync_get_memory()[0]
         self._weights_bytes = self._baseline_free - post_weights_free
         # Pool-budget baseline for the desktop cache sliders: free VRAM after the weights are
@@ -354,6 +370,27 @@ class Engine:
             self._init_offload_moe_cache(config)
         if hasattr(self.model, "prepare_for_runtime"):
             self.model.prepare_for_runtime()
+        self.encoder_cache = None
+        self.mm_processor = None
+        if config.active_encoders:
+            from freetoken.mm.encoder_cache import EncoderCache
+            from freetoken.mm.processor import get_mm_processor
+
+            self.mm_processor = get_mm_processor(config.model_path, config.mm)
+            self.encoder_cache = EncoderCache(storage=config.mm.embed_cache_device)
+            logger.info_rank0(
+                f"Multimodal enabled: {type(self.mm_processor).__name__}, encoders "
+                f"{[e.kind for e in config.active_encoders]} on {config.mm.encoder_weights}, serving {sorted(config.served_modalities)}"
+            )
+            self._warmup_encoders()
+        elif any(getattr(config.hf_config, key, None) is not None for key in ENCODER_SECTIONS):
+            logger.info_rank0(
+                "Multimodal disabled: --text-model-only"
+                if config.mm.text_model_only
+                else "Multimodal disabled: --mm-disable"
+                if config.mm.disabled_encoders
+                else "Multimodal disabled: no encoder registered for this architecture"
+            )
 
         # ======================= KV cache initialization ========================
         new_free = self._sync_get_memory()[1]
@@ -451,6 +488,7 @@ class Engine:
             vocab_size=config.model_config.vocab_size,
             dummy_req=self.dummy_req,
             moe_offload_cache=self.moe_offload_cache,
+            mrope=config.model_config.model_is_mrope,
         )
         if config.attention_backend.split(",")[0] == "triton":
             # Prefill runs on the first comma part; warm its autotune cache.
@@ -487,6 +525,12 @@ class Engine:
         model_state = self.model.state_dict()
         if config.use_dummy_weight:
             return _make_dummy_weight_state_dict(model_state, device=self.device)
+        if config.active_encoders and ftw_lacks_vision(config.model_path):
+            raise ValueError(
+                f"{config.model_path} holds no vision encoder tensors: it was converted by a build before this "
+                "family served images. Reconvert it with `ft checkpoint`, add the encoder in place with "
+                "scripts/ftw_hotfix.py (docs/ftw-hotfix.md), or start with --text-model-only"
+            )
         # _materialize casts each loaded tensor to its model-param dtype (model_state), so
         # models declaring per-tensor dtypes (e.g. DSV4's mixed fp8/fp32/bf16) are preserved;
         # offload models exclude experts (served from the offload cache, not dense weights).
@@ -496,10 +540,43 @@ class Engine:
                 config.model_path,
                 self.device,
                 include_moe_experts=not is_offload_moe_strategy(config.moe_strategy),
+                include_vision=bool(config.active_encoders),
             ),
             device=self.device,
         )
 
+    @torch.inference_mode()
+    def _warmup_encoders(self) -> None:
+        for item in self.mm_processor.dummy_items(self.dtype, self.device):
+            if item.modality in self.config.served_modalities:
+                self.model.encode(item)
+        torch.cuda.synchronize(self.device)
+
+    @torch.inference_mode()
+    def _run_mm_encoder(self, batch: Batch) -> None:
+        """Encode the chunk's cache-miss items and gather its embedding rows into batch.mm_embeds, right before the LM forward."""
+        cache = self.encoder_cache
+        jobs = batch.mm_encoder_jobs or ()
+        # a job whose rows are not gathered this chunk would be encoded and freed unread
+        planned = {row[1] for row in batch.mm_gather_plan}
+        orphans = [item.hash for item in jobs if item.hash not in planned]
+        assert not orphans, f"encoder jobs without gather rows: {orphans}"
+        for item in jobs:
+            if not cache.has(item.hash):
+                if item.precomputed_embeddings is not None:
+                    emb = item.precomputed_embeddings.to(self.device, non_blocking=True)
+                else:
+                    emb = self.model.encode(item)
+                cache.put(item.hash, emb)
+            # cached now; free the ~MiB feature buffer
+            item.feature = None
+            item.precomputed_embeddings = None
+        parts = []
+        for uid, item_hash, lo, hi, _, _ in batch.mm_gather_plan:
+            parts.append(cache.get_slice(item_hash, lo, hi, self.device))
+            cache.consume(item_hash, uid, hi - lo)
+        if parts:
+            batch.mm_embeds = torch.cat([p.to(self.dtype) for p in parts], dim=0)
 
     def _resolve_auto_moe_cache_size(self, config: EngineConfig, banks, method=None) -> tuple[int, int, bool]:
         """Resolve --moe-cache-auto into (moe_cache_size, num_pages, prefill_overlap).
@@ -935,6 +1012,7 @@ class Engine:
             vocab_size=config.model_config.vocab_size,
             dummy_req=self.dummy_req,
             moe_offload_cache=self.moe_offload_cache,
+            mrope=config.model_config.model_is_mrope,
         )
 
     def forward_batch(self, batch: Batch, args: BatchSamplingArgs) -> ForwardOutput:
@@ -943,6 +1021,9 @@ class Engine:
         prepare = getattr(self.model, "prepare_host_inputs", None)
         if prepare is not None:
             prepare(batch)
+        if batch.mm_gather_plan:
+            self._run_mm_encoder(batch)
+
         use_graph = self.graph_runner.can_use_cuda_graph(batch)
         with self.ctx.forward_batch(batch), self.model.forward_host_ctx(batch, use_graph):
             logits = self.graph_runner.replay(batch) if use_graph else self.model.forward()
@@ -1058,6 +1139,10 @@ class Engine:
                 batch.padded_reqs = batch.reqs
                 batch.input_ids = torch.zeros(length, dtype=torch.int32, device=self.device)
                 batch.positions = torch.arange(length, dtype=torch.int32, device=self.device)
+                if self.config.model_config.model_is_mrope:
+                    batch.mrope_positions = (
+                        batch.positions.unsqueeze(0).expand(3, -1).contiguous()
+                    )
                 batch.out_loc = dummy_row[:length]
                 self.attn_backend.prepare_metadata(batch)
                 with self.ctx.forward_batch(batch):
@@ -1085,6 +1170,38 @@ def _profile_gpu(index: "int | None" = None) -> Tuple[str | None, str | None]:
         return None, None
     ident = gpu_identity(torch.cuda.current_device() if index is None else index)
     return ident["name"], ident["uuid"]
+
+
+def _is_unified_memory_gpu(index: "int | None" = None) -> bool:
+    """True when the GPU has no separate device memory (cudaDevAttrIntegrated): host
+    banks and the GPU slot cache are the same DRAM, so the offload family's pinned
+    staging + slot gather are DRAM-to-DRAM copies with no PCIe link to hide behind.
+
+    The attribute is reliable on true-UMA parts (Jetson, GB10/DGX Spark) but not on
+    C2C-linked discrete-HBM parts (GH200 reports integrated=0 despite coherent CPU
+    memory), and it has only been verified on GB10 so far --
+    FREETOKEN_UNIFIED_MEMORY=0/1 overrides the probe where the attribute lies."""
+    env = os.environ.get("FREETOKEN_UNIFIED_MEMORY")
+    if env is not None:
+        return env.strip().lower() not in {"0", "false", "no", "off"}
+    if not torch.cuda.is_available():
+        return False
+    try:
+        dev = torch.cuda.current_device() if index is None else index
+        return bool(torch.cuda.get_device_properties(dev).is_integrated)
+    except Exception:
+        return False
+
+
+def _fused_resident_ok(model_config) -> bool:
+    """Whether the resident ('fused') MoE path can hold this model's experts.
+   
+       FIXME: auto resolves to fused only for bf16 and fp8_block experts; drop this gate once the other quant formats support fused.
+       """
+    expert_quant = getattr(model_config, "expert_quant", "none")
+    if expert_quant not in ("none", "fp8_block"):
+        return False
+    return getattr(model_config, "moe_weight_format", None) in (None, "bf16")
 
 
 def _ensure_expandable_segments() -> None:
@@ -1558,6 +1675,21 @@ def _adjust_config(config: EngineConfig):
         # -- auto never picks it, because nothing here knows whether the experts would fit in
         # HBM and a wrong guess is a weight-load OOM rather than a slower-but-working run.
         default_backend = "offload"
+        # Unified memory (GB10/DGX Spark, Jetson): there is no host/device boundary, so
+        # the offload family stages and gathers between two names for the same DRAM (on
+        # GB10 this added a measured ~130 s stall to every request, #369). Resident
+        # experts are the safe default here, not the risky one: the model and its banks
+        # page from the same pool, so the "wrong guess = weight-load OOM" rationale above
+        # does not apply. The benchbw hybrid upgrade is skipped too: CPU execution adds
+        # no bandwidth when both sides share one memory. Only formats the resident path
+        # can actually hold take this branch; the rest stay on offload as before.
+        unified_memory = _is_unified_memory_gpu()
+        if unified_memory and _fused_resident_ok(model_config):
+            default_backend = "fused"
+            logger.info_rank0(
+                "Unified-memory GPU detected; auto-selecting 'fused' MoE strategy "
+                "(resident experts) instead of offload"
+            )
         # Hardware-adaptive config: a cached `ft bench bw` profile can upgrade
         # the offload default to hybrid when this machine's CPU MoE bandwidth clears its PCIe
         # gather bandwidth by the bench threshold (default 2x). hybrid is VRAM-equivalent to
@@ -1571,7 +1703,14 @@ def _adjust_config(config: EngineConfig):
         from freetoken.moe.bench_profile import load_backend_recommendation
 
         gpu_name, gpu_uuid = _profile_gpu()
-        if load_backend_recommendation(bench_fmt, gpu_name=gpu_name, gpu_uuid=gpu_uuid) == "hybrid":
+        if (
+            default_backend == "offload"
+            and not unified_memory
+            and load_backend_recommendation(
+                bench_fmt, gpu_name=gpu_name, gpu_uuid=gpu_uuid
+            )
+            == "hybrid"
+        ):
             from freetoken.moe.cpu_executor import compiled_extension_supports
 
             _act = getattr(model_config, "hidden_act", "silu")
@@ -1616,6 +1755,20 @@ def _adjust_config(config: EngineConfig):
                 "No MoE cache sizing flag given; defaulting to --moe-cache-auto for "
                 f"auto-selected strategy {config.moe_strategy!r}"
             )
+
+    if (
+        is_moe
+        and config.moe_strategy == "offload"
+        and _is_unified_memory_gpu()
+        and _fused_resident_ok(model_config)
+    ):
+        # An explicit offload pick is honored, but on unified memory the user is paying
+        # for copies between two names for the same DRAM; say so once at config time.
+        logger.warning_rank0(
+            "--moe-strategy offload on a unified-memory GPU: expert 'streaming' copies "
+            "DRAM to DRAM (there is no PCIe link to overlap it with). If the model fits, "
+            "--moe-strategy fused avoids the slot-cache machinery entirely."
+        )
 
     if is_moe and config.moe_strategy == "fused":
         # An explicit 'fused' keeps the experts resident, so there is no slot cache to size. The

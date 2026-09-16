@@ -51,6 +51,8 @@ class AttentionSpec:
     # per-request and cannot express a different selection per query.
     kv_indptr: torch.Tensor | None = None
     kv_indices: torch.Tensor | None = None
+    # rows of a multimodal span (batch.mm_block_ends) also attend to the span's later keys
+    bidirectional_mm_blocks: bool = False
 
 
 @dataclass
